@@ -20,7 +20,9 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 
+import 'package:app_links/app_links.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/foundation.dart';
@@ -30,19 +32,23 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:musify/API/musify.dart';
+import 'package:musify/extensions/l10n.dart';
 import 'package:musify/localization/app_localizations.dart';
 import 'package:musify/services/audio_service.dart';
 import 'package:musify/services/data_manager.dart';
 import 'package:musify/services/logger_service.dart';
+import 'package:musify/services/playlist_sharing.dart';
 import 'package:musify/services/router_service.dart';
 import 'package:musify/services/settings_manager.dart';
 import 'package:musify/services/update_manager.dart';
 import 'package:musify/style/app_themes.dart';
+import 'package:musify/utilities/flutter_toast.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 late MusifyAudioHandler audioHandler;
 
 final logger = Logger();
+final appLinks = AppLinks();
 
 bool isFdroidBuild = false;
 bool isUpdateChecked = false;
@@ -232,7 +238,53 @@ Future<void> initialisation() async {
       }
       userChosenClients = chosenClients;
     }
+
+    if (Platform.isAndroid || Platform.isIOS) {
+      try {
+        final initialUri = await appLinks.getInitialLink();
+        if (initialUri != null) {
+          handleIncomingLink(initialUri);
+        }
+        // Listen to incoming links while app is running
+        appLinks.uriLinkStream.listen(
+          handleIncomingLink,
+          onError: (err) {
+            logger.log('URI link error:', err, null);
+          },
+        );
+      } on PlatformException {
+        logger.log('Failed to get initial uri', null, null);
+      }
+    }
   } catch (e, stackTrace) {
     logger.log('Initialization Error', e, stackTrace);
+  }
+}
+
+void handleIncomingLink(Uri? uri) async {
+  if (uri != null && uri.scheme == 'musify' && uri.host == 'playlist') {
+    try {
+      if (uri.pathSegments[0] == 'custom') {
+        final encodedPlaylist = uri.pathSegments[1];
+
+        final playlist = await PlaylistSharingService.decodeAndExpandPlaylist(
+          encodedPlaylist,
+        );
+
+        if (playlist != null) {
+          userCustomPlaylists.add(playlist);
+          addOrUpdateData('user', 'customPlaylists', userCustomPlaylists);
+          showToast(
+            NavigationManager().context,
+            '${NavigationManager().context.l10n!.addedSuccess}!',
+          );
+          // TODO: update state so new playlist is visible in the library page
+        } else {
+          showToast(NavigationManager().context, 'Invalid playlist data');
+        }
+      }
+    } catch (e) {
+      showToast(NavigationManager().context, 'Failed to load playlist');
+    }
   }
 }
